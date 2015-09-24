@@ -7,9 +7,11 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"time"
 
 	"code.google.com/p/gcfg"
 	r "github.com/dancannon/gorethink"
+	"github.com/googollee/go-socket.io"
 
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
@@ -24,6 +26,7 @@ var (
 	api        = "https://api.instagram.com/v1/"
 	lastUpdate float64
 	session    *r.Session
+	server     *socketio.Server
 
 	//CLIENT_ID     = "7839c51c2a324f46a51c77c91711c8c3"
 	//CLIENT_SECRET = "9fbfea5eab08476a88c56f825175501e"
@@ -40,13 +43,6 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
-	//if (req.param("hub.verify_token") == config.instagram.verify)
-	//res.send(req.param("hub.challenge"));
-	//else res.status(500).json({err: "Verify token incorrect"});
-
-	//w.Header().Set("Content-Type", "application/json")
-
-	//result := "tmp"
 }
 
 func subscribeTag() {
@@ -90,21 +86,6 @@ func subscribeTag() {
 		fmt.Println(body)
 	}
 	defer resp.Body.Close()
-
-	//var params = {
-	//client_id: config.instagram.client,
-	//client_secret: config.instagram.secret,
-	//verify_token: config.instagram.verify,
-	//object: "tag", aspect: "media", object_id: tagName,
-	//callback_url: "http://" + config.host + "/publish/photo"
-	//};
-
-	//request.post({url: api + "subscriptions", form: params},
-	//function(err, response, body) {
-	//if (err) console.log("Failed to subscribe:", err)
-	//else console.log("Subscribed to tag:", tagName);
-	//});
-
 }
 
 func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
@@ -129,24 +110,22 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if bodyContent != nil {
-		fmt.Println("string: ")
-		fmt.Println(string(bodyContent[1 : len(bodyContent)-1]))
+		//fmt.Println("string: ")
+		//fmt.Println(string(bodyContent[1 : len(bodyContent)-1]))
 		err = json.Unmarshal(bodyContent[1:len(bodyContent)-1], &data)
 	}
 	if err != nil {
-		fmt.Println("Unable to unmarshall the JSON request", err)
+		log.Println("Unable to unmarshall the JSON request", err)
 		return
 	}
-	time := data["time"].(float64)
-	fmt.Println(time)
-	if time-lastUpdate < 1 {
-		fmt.Println("time too close, return!")
+	updatetime := data["time"].(float64)
+	if updatetime-lastUpdate < 1 {
+		log.Println("time too close, return!")
 		return
 	}
-	lastUpdate = time
+	lastUpdate = updatetime
 
 	var path = "https://api.instagram.com/v1/tags/" + cfg.Instagram.TagName + "/media/recent?client_id=" + cfg.Instagram.ClientID
-	fmt.Println(path)
 	// post data:
 	//"changed_aspect": "media",
 	//"object": "tag",
@@ -154,14 +133,21 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	//"time": 1414995025,
 	//"subscription_id": 14185203,
 	//"data": {}
+	now := time.Now().Format("2006-01-02 15:04:05")
 
-	//r.Table("instacat").Insert()
-	res, err := r.HTTP(path).Run(session)
+	//res, err := r.Table("instacat").Insert(r.HTTP(path).Field("data").Merge(map[string]interface{}{"time": now}, map[string]interface{}{"place": r.Point(20, 80)})).Run(session)
+	res, err := r.Table("instacat").Insert(r.HTTP(path).Field("data").Merge(
+		map[string]interface{}{"time": now},
+		map[string]interface{}{"place": r.Point(
+			r.Row.Field("location").Field("longitude").Default(120.58),
+			r.Row.Field("location").Field("latitude").Default(23.58),
+		)})).Run(session)
+
 	if err != nil {
-		log.Println(err)
+		log.Println("Unable to unmarshall the JSON request", err)
 		return
 	}
-	fmt.Println(res)
+	defer res.Close()
 
 }
 
@@ -194,51 +180,59 @@ func init() {
 	log.Println("Create index time.")
 	r.Table("instacat").IndexCreate("place", r.IndexCreateOpts{Geo: true}).Run(session)
 	log.Println("Create index place.")
-
-	var value interface{}
-	cur, err := r.Table("instacat").Changes().Run(session)
-	if err != nil {
-		log.Println(err.Error())
-	}
-	for cur.Next(&value) {
-		fmt.Println(value)
-	}
-	//ws := c.Socket()
-	//if err = websocket.JSON.Send(ws, data); err != nil {
-	//ws.Close()
-
-	//r.table("instacat").changes().run(conn)
-	//.then(function(cursor) {
-	//cursor.each(function(err, item) {
-	//if (item && item.new_val)
-	//io.sockets.emit("cat", item.new_val);
-	//});
-	//})
 }
 
 func main() {
-
 	e := echo.New()
-
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(cors.Default().Handler)
-
-	// Serve index file
 	e.Index("public/index.html")
+	e.Static("/", "public")
+	//e.Favicon("public/favicon.ico")
 
-	//e.ServeFile("/ClientTracker", "./public/ClientTracker.js")
+	server, err := socketio.NewServer(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	//apiv2.Get("", APIHandler)
 	e.Get("/publish/photo", CallbackHandler)
 	e.Post("/publish/photo", ReceiveHandler)
-	//apiv2.Get("/overview", OverviewHandler)
+	e.Get("/socket.io/", server)
 
-	//e.WebSocket("/ws", WebSocketHandler)
-
-	// Starting HTTPS server (Production)
 	port := ":3000"
 	log.Printf("Starting HTTP service on %s ...", port)
-	//subscribeTag()
+	go func() {
+		//subscribeTag()
+		var value map[string]interface{}
+		cur, err := r.Table("instacat").Changes().Run(session)
+		if err != nil {
+			log.Println(err.Error())
+		}
+		for cur.Next(&value) {
+			if value["new_val"] != nil {
+				//fmt.Println(value["new_val"])
+				server.On("connection", func(so socketio.Socket) {
+					so.Emit("cat", value["new_val"])
+				})
+			}
+		}
+	}()
+
+	server.On("connection", func(so socketio.Socket) {
+		result := make([]interface{}, 10)
+		//var result interface{}
+		cur, err := r.Table("instacat").OrderBy(r.OrderByOpts{
+			Index: r.Desc("time"),
+		}).Limit(10).Run(session)
+		if err != nil {
+			log.Println(err.Error())
+		}
+		cur.All(&result)
+		fmt.Println("get result over !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+		//fmt.Println(result)
+		so.Emit("recent", result)
+		defer cur.Close()
+	})
 	e.Run(port)
 }
