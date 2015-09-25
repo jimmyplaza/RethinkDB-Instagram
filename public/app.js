@@ -21,13 +21,15 @@ $(document).ready(function() {
   });
 
   function addCat(cat) {
+      console.log("in addCat.")
+      //console.log(cat)
     cat.date = moment.unix(cat.created_time).format("MMM DD, h:mm a");
     $("#cats").prepend(template(cat));
 
     if (cat.place) {
       var count = markers.unshift(L.marker(L.latLng(
-          cat.place.Point.Lon,
-          cat.place.Point.Lat)));
+          cat.place.Point.Lat,
+          cat.place.Point.Lon)));
 
       map.addLayer(markers[0]);
       markers[0].bindPopup(
@@ -44,9 +46,12 @@ $(document).ready(function() {
   //var socket = io.connect('http://localhost');
   var socket = io();
 
-  socket.on("cat", addCat);
-  socket.on("recent", function(data) {
+  socket.on("cat", addCat); //for real time add cat
+  socket.on("recent", function(data) { // add recent 12 cats on the photo wall
     data.reverse().forEach(addCat);
+  });
+  socket.on("disconnection", function(data) {
+      console.log("disconnect.")
   });
 
 });

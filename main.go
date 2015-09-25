@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -20,20 +21,16 @@ import (
 )
 
 var (
-	Version    = "0.1"
+	VERSION    = "1.0"
 	cfg        cfgObject //at types.go
 	configFile = flag.String("c", "config.gcfg", "config filename")
 	api        = "https://api.instagram.com/v1/"
 	lastUpdate float64
 	session    *r.Session
 	server     *socketio.Server
-
-	//CLIENT_ID     = "7839c51c2a324f46a51c77c91711c8c3"
-	//CLIENT_SECRET = "9fbfea5eab08476a88c56f825175501e"
-	//tagName       = "catsofinstagram"
 )
 
-//
+// Callbackhandler accept Instagram GET and check auth
 func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("In CallbackHandler!")
 	fmt.Println(r.URL.Query().Get("hub.verify_token"))
@@ -45,7 +42,8 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func subscribeTag() {
+// Subscribetag subscribe Instagram real time API, when complete auth, Instagram will continu post newest cats photo
+func SubscribeTag() {
 	request := gorequest.New()
 	url := api + "subscriptions"
 
@@ -88,6 +86,7 @@ func subscribeTag() {
 	defer resp.Body.Close()
 }
 
+// Receivehandler handle POST. Instagram will continue POST newest cats photo
 func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	fmt.Println("In ReceiveHandler!")
 	//type ReqBody struct {
@@ -98,7 +97,6 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	//subscription_id int64       `json"subscription_id"`
 	//data            interface{} `json:"data"`
 	//}
-	//var rb ReqBody
 
 	//FIXME bodycontent is array@@, so need to trim first and list quot
 	var err error
@@ -110,8 +108,6 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if bodyContent != nil {
-		//fmt.Println("string: ")
-		//fmt.Println(string(bodyContent[1 : len(bodyContent)-1]))
 		err = json.Unmarshal(bodyContent[1:len(bodyContent)-1], &data)
 	}
 	if err != nil {
@@ -120,7 +116,7 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	updatetime := data["time"].(float64)
 	if updatetime-lastUpdate < 1 {
-		log.Println("time too close, return!")
+		log.Println("Time too close, return!\n")
 		return
 	}
 	lastUpdate = updatetime
@@ -135,12 +131,12 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	//"data": {}
 	now := time.Now().Format("2006-01-02 15:04:05")
 
-	//res, err := r.Table("instacat").Insert(r.HTTP(path).Field("data").Merge(map[string]interface{}{"time": now}, map[string]interface{}{"place": r.Point(20, 80)})).Run(session)
+	// Some photo has no geographical coordiate, so randomly choose their location for demo use.
 	res, err := r.Table("instacat").Insert(r.HTTP(path).Field("data").Merge(
 		map[string]interface{}{"time": now},
 		map[string]interface{}{"place": r.Point(
-			r.Row.Field("location").Field("longitude").Default(120.58),
-			r.Row.Field("location").Field("latitude").Default(23.58),
+			r.Row.Field("location").Field("longitude").Default(120+rand.Intn(10)),
+			r.Row.Field("location").Field("latitude").Default(23+rand.Intn(10)),
 		)})).Run(session)
 
 	if err != nil {
@@ -148,11 +144,9 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer res.Close()
-
 }
 
 func init() {
-
 	flag.Parse()
 	err := gcfg.ReadFileInto(&cfg, *configFile)
 	if err != nil {
@@ -172,67 +166,73 @@ func init() {
 	}
 
 	fmt.Printf("%d DB created\n", res.DBsCreated)
-
 	r.DB(cfg.Database.DB).TableCreate("instacat").Run(session)
 	log.Println("Create table instacat.")
-
 	r.Table("instacat").IndexCreate("time").Run(session)
 	log.Println("Create index time.")
 	r.Table("instacat").IndexCreate("place", r.IndexCreateOpts{Geo: true}).Run(session)
 	log.Println("Create index place.")
 }
 
+// RealtimeChange use RethinkDB's changefeed method to continuely polling newly added photo, and emit to the socket.
+func RealtimeChangefeed(so socketio.Socket) {
+	//SubscribeTag()
+	var value map[string]interface{}
+	cur, err := r.Table("instacat").Changes().Run(session)
+	if err != nil {
+		log.Println(err.Error())
+	}
+	for cur.Next(&value) {
+		if value["new_val"] != nil {
+			log.Println("New Cat Come!!!!")
+			so.Emit("cat", value["new_val"])
+		}
+	}
+}
+
 func main() {
+	log.Println("VERSION: ", VERSION)
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(cors.Default().Handler)
 	e.Index("public/index.html")
 	e.Static("/", "public")
+
 	//e.Favicon("public/favicon.ico")
 
 	server, err := socketio.NewServer(nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	e.Get("/publish/photo", CallbackHandler)
 	e.Post("/publish/photo", ReceiveHandler)
 	e.Get("/socket.io/", server)
 
-	port := ":3000"
-	log.Printf("Starting HTTP service on %s ...", port)
-	go func() {
-		//subscribeTag()
-		var value map[string]interface{}
-		cur, err := r.Table("instacat").Changes().Run(session)
-		if err != nil {
-			log.Println(err.Error())
-		}
-		for cur.Next(&value) {
-			if value["new_val"] != nil {
-				//fmt.Println(value["new_val"])
-				server.On("connection", func(so socketio.Socket) {
-					so.Emit("cat", value["new_val"])
-				})
-			}
-		}
-	}()
-
 	server.On("connection", func(so socketio.Socket) {
-		result := make([]interface{}, 10)
-		//var result interface{}
+		log.Println("====================== on connection ======================")
+		result := make([]interface{}, 12)
 		cur, err := r.Table("instacat").OrderBy(r.OrderByOpts{
 			Index: r.Desc("time"),
-		}).Limit(10).Run(session)
+		}).Limit(12).Run(session)
 		if err != nil {
 			log.Println(err.Error())
 		}
 		cur.All(&result)
-		fmt.Println("get result over !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-		//fmt.Println(result)
-		so.Emit("recent", result)
-		defer cur.Close()
+		fmt.Println("Get result over. ")
+		err = so.Emit("recent", result)
+		if err != nil {
+			log.Println(err.Error())
+		}
+		so.On("disconnection", func() {
+			log.Println("on disconnect")
+		})
+
+		RealtimeChangefeed(so)
 	})
+
+	port := ":3000"
+	log.Printf("Starting HTTP service on %s ...", port)
 	e.Run(port)
+
 }
