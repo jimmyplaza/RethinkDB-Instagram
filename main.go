@@ -8,6 +8,8 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"code.google.com/p/gcfg"
@@ -21,13 +23,14 @@ import (
 )
 
 var (
-	VERSION    = "1.0"
-	cfg        cfgObject //at types.go
-	configFile = flag.String("c", "config.gcfg", "config filename")
-	api        = "https://api.instagram.com/v1/"
-	lastUpdate float64
-	session    *r.Session
-	server     *socketio.Server
+	VERSION      = "1.0"
+	cfg          cfgObject //at types.go
+	configFile   = flag.String("c", "config.gcfg", "config filename")
+	api          = "https://api.instagram.com/v1/"
+	lastUpdate   float64
+	session      *r.Session
+	server       *socketio.Server
+	callback_url string
 )
 
 // Callbackhandler accept Instagram GET and check auth
@@ -42,8 +45,43 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func sub() {
+	time.Sleep(2 * time.Second)
+	//payload := "client_id=7839c51c2a324f46a51c77c91711c8c3&client_secret=9fbfea5eab08476a88c56f825175501e&verify_token=hihi&object_id=catsofinstagram&callback_url=http://6f7f13ef.ngrok.io/publish/photo&object=tag&aspect=media"
+	payload :=
+		"client_id=" + cfg.Instagram.ClientID +
+			"&client_secret=" + cfg.Instagram.ClientSecret +
+			"&verify_token=" + cfg.Instagram.Verify +
+			"&object_id=" + cfg.Instagram.TagName +
+			"&callback_url=" + callback_url + "/publish/photo" +
+			"&object=" + "tag" +
+			"&aspect=" + "media"
+
+	resp, err := http.Post("https://api.instagram.com/v1/subscriptions",
+		"application/x-www-form-urlencoded",
+		//strings.NewReader("client_id=7839c51c2a324f46a51c77c91711c8c3&client_secret=9fbfea5eab08476a88c56f825175501e&verify_token=hihi&object_id=catsofinstagram&callback_url=http://6f7f13ef.ngrok.io/publish/photo&object=tag&aspect=media"))
+		strings.NewReader(payload))
+
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	fmt.Println("==========================")
+	fmt.Println(string(body))
+
+}
+
 // Subscribetag subscribe Instagram real time API, when complete auth, Instagram will continu post newest cats photo
 func SubscribeTag() {
+	time.Sleep(2 * time.Second)
 	request := gorequest.New()
 	url := api + "subscriptions"
 
@@ -52,13 +90,14 @@ func SubscribeTag() {
 		"client_secret": cfg.Instagram.ClientSecret,
 		"verify_token":  cfg.Instagram.Verify,
 		"object_id":     cfg.Instagram.TagName,
-		"callback_url":  cfg.Instagram.CallbackUrl + "/publish/photo",
-		"object":        "tag",
-		"aspect":        "media",
+		//"callback_url":  cfg.Instagram.CallbackUrl + "/publish/photo",
+		"callback_url": callback_url + "/publish/photo",
+		"object":       "tag",
+		"aspect":       "media",
 	}
 
 	mJson, _ := json.Marshal(m)
-	//fmt.Println(string(mJson))
+	fmt.Println(string(mJson))
 	//contentReader := bytes.NewReader(mJson)
 	//req, _ := http.NewRequest("POST", url, contentReader)
 	////req.Header.Set("Content-Type", "application/json")
@@ -68,11 +107,8 @@ func SubscribeTag() {
 
 	resp, body, errs := request.Post(url).
 		//Send(`{"client_id":"7839c51c2a324f46a51c77c91711c8c3","client_secret":"9fbfea5eab08476a88c56f825175501e","verify_token":"hihi","object_id":"catsofinstagram","callback_url":"http://b099b464.ngrok.io/publish/photo","object":"tag","aspect":"media"}`).End()
-		Set("Content-Type", "application/json").
-		Set("Accept", "application/json").
+		Set("Header", "application/x-www-form-urlencoded").
 		Send(string(mJson)).End()
-
-	//Set("Header", "application/x-www-form-urlencoded").
 
 	if errs != nil {
 		log.Println(errs)
@@ -199,6 +235,11 @@ func main() {
 	e.Index("public/index.html")
 	e.Static("/", "public")
 
+	if len(os.Args) < 2 {
+		fmt.Println("\nPlease input callback url.\n  Usage: app.exe [callback_url]")
+		os.Exit(0)
+	}
+	callback_url = os.Args[1]
 	//e.Favicon("public/favicon.ico")
 
 	server, err := socketio.NewServer(nil)
@@ -224,13 +265,15 @@ func main() {
 		if err != nil {
 			log.Println(err.Error())
 		}
-		so.On("disconnection", func() {
+		so.On("disconnect", func() {
 			log.Println("on disconnect")
 		})
 
 		RealtimeChangefeed(so)
 	})
 
+	//go SubscribeTag()
+	go sub()
 	port := ":3000"
 	log.Printf("Starting HTTP service on %s ...", port)
 	e.Run(port)

@@ -2,7 +2,7 @@
 ClientID = 7839c51c2a324f46a51c77c91711c8c3
 ClientSecret = 9fbfea5eab08476a88c56f825175501e
 TagName       = catsofinstagram
-CallbackUrl = http://2d1ef175.ngrok.io
+CallbackUrl = http://faf53e83.ngrok.io
 Verify = hihi
 
 

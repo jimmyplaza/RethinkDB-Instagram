@@ -50,7 +50,7 @@ $(document).ready(function() {
   socket.on("recent", function(data) { // add recent 12 cats on the photo wall
     data.reverse().forEach(addCat);
   });
-  socket.on("disconnection", function(data) {
+  socket.on("disconnect", function() {
       console.log("disconnect.")
   });
 
