@@ -1,11 +1,44 @@
 
 $(document).ready(function() {
 
-  var mapTiles = "http://{s}.tile.osm.org/{z}/{x}/{y}.png";
-  var mapAttrib = "&copy; <a href=\"http://osm.org/copyright\">OpenStreetMap</a> contributors";
+  //var mapTiles = "http://{s}.tile.osm.org/{z}/{x}/{y}.png";
+  //var mapTiles = "http://tile.stamen.com/watercolor/{z}/{x}/{y}.png";
+  //var mapAttrib = "&copy; <a href=\"http://osm.org/copyright\">OpenStreetMap</a> contributors";
 
-  var map = L.map("map").setView([0, 0], 2);
-  map.addLayer(L.tileLayer(mapTiles, {attribution: mapAttrib}));
+  //var map = L.map('map').setView([0, 0], 2);
+        //mapLink =
+            //'<a href="http://openstreetmap.org">OpenStreetMap</a>';
+        //L.tileLayer(
+            ////'http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            //'http://{s}.tile.stamen.com/watercolor/{z}/{x}/{y}.jpg', {
+            //attribution: 'Map data &copy; ' + mapLink,
+            //maxZoom: 18,
+            //}).addTo(map);
+
+// =================================================================
+
+  var osmLink = '<a href="http://openstreetmap.org">OpenStreetMap</a>',
+    thunLink = '<a href="http://thunderforest.com/">Thunderforest</a>';
+
+  var osmUrl = 'http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    osmAttrib = '&copy; ' + osmLink + ' Contributors',
+    waterUrl = 'http://{s}.tile.stamen.com/watercolor/{z}/{x}/{y}.jpg',
+    thunAttrib = '&copy; '+osmLink+' Contributors & '+thunLink;
+
+  var osmMap = L.tileLayer(osmUrl, {attribution: osmAttrib, maxZoom: 18}),
+       waterMap = L.tileLayer(waterUrl, {attribution: thunAttrib, maxZoom: 18});
+
+  var map = L.map('map', {
+        layers: [waterMap] // only add one!
+       })
+       .setView([0, 0], 2);
+
+  var baseLayers = {
+      "OpenStreetMap": osmMap,
+      "WaterColor": waterMap
+    };
+
+  L.control.layers(baseLayers).addTo(map);
 
   var template = Handlebars.compile($("#cat-template").html());
   var markers = [];
