@@ -15,6 +15,7 @@ import (
 	"code.google.com/p/gcfg"
 	r "github.com/dancannon/gorethink"
 	"github.com/googollee/go-socket.io"
+	"github.com/jmoiron/jsonq"
 
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
@@ -122,6 +123,16 @@ func SubscribeTag() {
 	defer resp.Body.Close()
 }
 
+type JsonType struct {
+	Tags      []string  `json:"tags"`
+	Username  string    `json:"username"`
+	Text      string    `json:"text"`
+	Location  []float64 `json:"location"`
+	Likes     float64   `json:"likes"`
+	Url       string    `json:"url"`
+	Timestamp string    `json:"@timestamp"`
+}
+
 // Receivehandler handle POST. Instagram will continue POST newest cats photo
 func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	fmt.Println("In ReceiveHandler!")
@@ -135,6 +146,11 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	//}
 
 	//FIXME bodycontent is array@@, so need to trim first and list quot
+	jj := JsonType{}
+	rsptime := fmt.Sprintf("%s", time.Now().Format("2006-01-02 15:04"))
+	rsptime = strings.Replace(rsptime, " ", "T", 1)
+	jj.Timestamp = rsptime
+
 	var err error
 	data := map[string]interface{}{}
 
@@ -168,18 +184,68 @@ func ReceiveHandler(w http.ResponseWriter, req *http.Request) {
 	now := time.Now().Format("2006-01-02 15:04:05")
 
 	// Some photo has no geographical coordiate, so randomly choose their location for demo use.
+
+	//result := make([]interface{}, 1)
+	var result map[string]interface{}
+	cur, err := r.HTTP(path).Field("data").Run(session)
+	if err != nil {
+		log.Println("r.HTTP error", err)
+		return
+	}
+	//cur.All(&result)
+	//fmt.Println(result)
+
+	//elkurl := "http://gcptools.nexusguard.com:9200/"
+	var longitude float64
+	var latitude float64
+	longitude = 120 + rand.Float64()
+	latitude = 23 + rand.Float64()
+
+	for cur.Next(&result) {
+		//fmt.Println(result["user"])
+		//fmt.Println(result["tags"])
+		//fmt.Println(result["caption"])
+		//fmt.Println(result["location"])
+		if result["location"] != nil {
+			jj.Location = []float64{result["location"].(map[string]interface{})["longitude"].(float64), result["location"].(map[string]interface{})["latitude"].(float64)}
+		} else {
+			jj.Location = []float64{longitude, latitude}
+		}
+
+		jq := jsonq.NewQuery(result)
+		//jj.Tags = result["tags"].(interface{}).([]string)
+		jj.Text = result["caption"].(map[string]interface{})["text"].(string)
+		jj.Username = result["user"].(map[string]interface{})["username"].(string)
+		jj.Likes = result["likes"].(map[string]interface{})["count"].(float64)
+		jj.Url = result["images"].(map[string]interface{})["standard_resolution"].(map[string]interface{})["url"].(string)
+		//ElkInput(elkurl, "cat2", "catstagram2", jj)
+		url, _ := jq.String("images", "standard_resolution", "url")
+		jj.Url = url
+		//ElkInput(elkurl, "cat3", "catstagram3", jj)
+	}
+
+	//updatetime := data["time"].(float64)
+	//if updatetime-lastUpdate < 1 {
+	//log.Println("Time too close, return!\n")
+	//return
+	//}
+	//lastUpdate = updatetime
+	//defer cur.Close()
+	cur.Close()
+
 	res, err := r.Table("instacat").Insert(r.HTTP(path).Field("data").Merge(
 		map[string]interface{}{"time": now},
 		map[string]interface{}{"place": r.Point(
-			r.Row.Field("location").Field("longitude").Default(120+rand.Intn(10)),
-			r.Row.Field("location").Field("latitude").Default(23+rand.Intn(10)),
+			r.Row.Field("location").Field("longitude").Default(longitude),
+			r.Row.Field("location").Field("latitude").Default(latitude),
 		)})).Run(session)
 
 	if err != nil {
 		log.Println("Unable to unmarshall the JSON request", err)
 		return
 	}
-	defer res.Close()
+	//defer res.Close()
+	res.Close()
 }
 
 func init() {
@@ -252,10 +318,11 @@ func main() {
 
 	server.On("connection", func(so socketio.Socket) {
 		log.Println("====================== on connection ======================")
-		result := make([]interface{}, 12)
+		displayNum := 50
+		result := make([]interface{}, displayNum)
 		cur, err := r.Table("instacat").OrderBy(r.OrderByOpts{
 			Index: r.Desc("time"),
-		}).Limit(12).Run(session)
+		}).Limit(displayNum).Run(session)
 		if err != nil {
 			log.Println(err.Error())
 		}
